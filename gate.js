@@ -208,3 +208,6 @@ const SignalGate = (() => {
 
   return { init, config: GATE_CONFIG };
 })();
+
+// expose to window so the page can call it (top-level const is module-scoped)
+window.SignalGate = SignalGate;
