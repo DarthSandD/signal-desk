@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-Signal Desk — data + signal engine (v2)
-Fetches live prices + history for Forex / Crypto / Stocks, computes a
-BUY/SELL signal per symbol, picks the single best opportunity, and writes
-data.json (plus bakes a fallback copy into index.html).
+Signal Desk — data + signal engine (v3)
+Multi-timeframe: computes signals on DAILY (D1) bars plus a WEEKLY (W1) higher-
+timeframe bias, with a TRUE ATR (Wilder, from high/low/close) and ATR% so the
+browser can re-anchor entry/stop/target to the LIVE price instead of a stale close.
 
-Sources: Yahoo Finance (all), Frankfurter (forex fallback), CoinGecko (crypto fallback).
+Writes data.json (and bakes a fallback into index.html).
 Run: python signals.py
 """
 
 import json
 import re
 import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
 
 try:
@@ -27,11 +27,16 @@ DATA_JSON = HERE / "data.json"
 INDEX_HTML = HERE / "index.html"
 
 YF = "https://query1.finance.yahoo.com/v8/finance/chart/{}"
-FRANKFURTER_HIST = "https://api.frankfurter.dev/v1/{start}..{end}"
-COINGECKO_CHART = "https://api.coingecko.com/api/v3/coins/{id}/market_chart"
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
-# ── Symbol universe ─────────────────────────────────────────────────────
+# Timeframes: (code, yahoo interval, yahoo range, human description, horizon)
+TF_PRIMARY = ("D1", "1d", "6mo", "Daily swing", "days–weeks")
+TF_HIGHER = ("W1", "1wk", "2y", "Weekly bias", "weeks–months")
+
+# Risk model (documented in the UI)
+ATR_STOP_MULT = 1.5
+ATR_TARGET_MULT = 2.25   # = 1.5R
+
 FOREX = [
     ("EURUSD=X", "EUR/USD", "Euro / US Dollar"),
     ("USDJPY=X", "USD/JPY", "US Dollar / Japanese Yen"),
@@ -45,28 +50,18 @@ FOREX = [
     ("GC=F", "XAU/USD", "Gold / US Dollar"),
 ]
 CRYPTO = [
-    ("BTC-USD", "BTC", "Bitcoin"),
-    ("ETH-USD", "ETH", "Ethereum"),
-    ("SOL-USD", "SOL", "Solana"),
-    ("XRP-USD", "XRP", "XRP"),
-    ("BNB-USD", "BNB", "BNB"),
-    ("ADA-USD", "ADA", "Cardano"),
-    ("DOGE-USD", "DOGE", "Dogecoin"),
-    ("AVAX-USD", "AVAX", "Avalanche"),
+    ("BTC-USD", "BTC", "Bitcoin"), ("ETH-USD", "ETH", "Ethereum"),
+    ("SOL-USD", "SOL", "Solana"), ("XRP-USD", "XRP", "XRP"),
+    ("BNB-USD", "BNB", "BNB"), ("ADA-USD", "ADA", "Cardano"),
+    ("DOGE-USD", "DOGE", "Dogecoin"), ("AVAX-USD", "AVAX", "Avalanche"),
 ]
 STOCKS = [
-    ("AAPL", "AAPL", "Apple"),
-    ("MSFT", "MSFT", "Microsoft"),
-    ("NVDA", "NVDA", "NVIDIA"),
-    ("TSLA", "TSLA", "Tesla"),
-    ("GOOGL", "GOOGL", "Alphabet"),
-    ("AMZN", "AMZN", "Amazon"),
-    ("META", "META", "Meta"),
-    ("AMD", "AMD", "AMD"),
-    ("SPY", "SPY", "S&P 500 ETF"),
-    ("^GSPC", "S&P 500", "S&P 500 Index"),
+    ("AAPL", "AAPL", "Apple"), ("MSFT", "MSFT", "Microsoft"),
+    ("NVDA", "NVDA", "NVIDIA"), ("TSLA", "TSLA", "Tesla"),
+    ("GOOGL", "GOOGL", "Alphabet"), ("AMZN", "AMZN", "Amazon"),
+    ("META", "META", "Meta"), ("AMD", "AMD", "AMD"),
+    ("SPY", "SPY", "S&P 500 ETF"), ("^GSPC", "S&P 500", "S&P 500 Index"),
 ]
-
 ICON = {"forex": "💱", "crypto": "🪙", "stocks": "📈"}
 
 
@@ -107,39 +102,50 @@ def macd_hist(x):
     return m[-1] - s[-1]
 
 
-def atr(x, n=14):
-    """Average true range proxy from closes (no OHLC needed for a stop distance)."""
-    if len(x) < n + 1:
+def true_atr(highs, lows, closes, n=14):
+    """True Average True Range (Wilder) from OHLC — the real thing, not a close proxy."""
+    if len(closes) < n + 1:
         return None
-    trs = [abs(x[i] - x[i - 1]) for i in range(1, len(x))]
-    return sum(trs[-n:]) / n
+    trs = []
+    for i in range(1, len(closes)):
+        h, l, pc = highs[i], lows[i], closes[i - 1]
+        if h is None or l is None or pc is None:
+            continue
+        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+    if len(trs) < n:
+        return None
+    atr = sum(trs[:n]) / n
+    for tr in trs[n:]:
+        atr = (atr * (n - 1) + tr) / n
+    return atr
 
 
-def compute_signal(x):
-    """Score-based signal: trend + RSI + MACD + momentum. Returns a dict."""
+def score_bars(bars, period_word="periods"):
+    """bars = {'close':[], 'high':[], 'low':[]} → signal dict (timeframe-agnostic)."""
+    x = bars["close"]
     if len(x) < 30:
         return None
     price = x[-1]
     s20, s50 = sma(x, 20), sma(x, 50)
     r = rsi(x)
     h = macd_hist(x)
-    a = atr(x)
+    a = true_atr(bars["high"], bars["low"], x)
     score = 0.0
     reasons = []
 
     if s20 and s50:
         if price > s20 > s50:
             score += 2.0
-            reasons.append("Uptrend: price above rising 20/50 MA")
+            reasons.append("Price above rising 20/50 MA")
         elif price < s20 < s50:
             score -= 2.0
-            reasons.append("Downtrend: price below falling 20/50 MA")
+            reasons.append("Price below falling 20/50 MA")
         elif price > s20:
             score += 0.5
-            reasons.append("Above 20-day average")
+            reasons.append("Above 20-period MA")
         else:
             score -= 0.5
-            reasons.append("Below 20-day average")
+            reasons.append("Below 20-period MA")
 
     if r is not None:
         if r < 30:
@@ -159,10 +165,10 @@ def compute_signal(x):
         mom = (price - x[-21]) / x[-21] * 100
         if mom > 1:
             score += 0.5
-            reasons.append(f"+{mom:.1f}% over 20 days")
+            reasons.append(f"+{mom:.1f}% over 20 {period_word}")
         elif mom < -1:
             score -= 0.5
-            reasons.append(f"{mom:.1f}% over 20 days")
+            reasons.append(f"{mom:.1f}% over 20 {period_word}")
 
     if score >= 2.5:
         sig = "STRONG BUY"
@@ -175,100 +181,108 @@ def compute_signal(x):
     else:
         sig = "NEUTRAL"
 
-    conf = max(35, min(95, round(50 + abs(score) * 11)))
-
-    # Trade levels from ATR (risk-managed 1.5R target)
-    entry = price
-    if a and a > 0:
-        if score >= 1.0:
-            stop, target = price - 1.5 * a, price + 2.25 * a
-        elif score <= -1.0:
-            stop, target = price + 1.5 * a, price - 2.25 * a
-        else:
-            stop = target = None
-    else:
-        stop = target = None
-
+    atr_pct = (a / price) if (a and price) else None
     return {
         "signal": sig,
         "score": round(score, 2),
-        "confidence": conf,
+        "confidence": max(35, min(95, round(50 + abs(score) * 11))),
         "rsi": round(r, 1) if r is not None else None,
         "sma20": round(s20, 6) if s20 else None,
         "sma50": round(s50, 6) if s50 else None,
         "macd": round(h, 6) if h is not None else None,
         "atr": round(a, 6) if a else None,
-        "entry": round(entry, 6),
-        "stop": round(stop, 6) if stop else None,
-        "target": round(target, 6) if target else None,
+        "atrPct": round(atr_pct, 6) if atr_pct else None,
         "reasons": reasons[:4],
     }
 
 
-# ── Fetchers ────────────────────────────────────────────────────────────
-def yf_history(sym, rng="6mo"):
-    r = requests.get(YF.format(sym), params={"interval": "1d", "range": rng},
+# ── Fetch ───────────────────────────────────────────────────────────────
+def yf_bars(sym, interval, rng):
+    r = requests.get(YF.format(sym), params={"interval": interval, "range": rng},
                      headers=UA, timeout=20)
     r.raise_for_status()
     d = r.json()["chart"]["result"][0]
     q = d["indicators"]["quote"][0]
     ts = d.get("timestamp", [])
-    closes = [(t, c) for t, c in zip(ts, q["close"]) if c is not None]
-    return [c for _, c in closes]
-
-
-def frankfurter_history(base="EUR"):
-    end = datetime.now(timezone.utc).date()
-    start = end - timedelta(days=200)
-    r = requests.get(FRANKFURTER_HIST.format(start=start, end=end),
-                     params={"from": base, "to": "USD"}, headers=UA, timeout=20)
-    r.raise_for_status()
-    return sorted(r.json()["rates"].items())
-
-
-def coingecko_history(cid):
-    r = requests.get(COINGECKO_CHART.format(id=cid),
-                     params={"vs_currency": "usd", "days": 180},
-                     headers=UA, timeout=20)
-    r.raise_for_status()
-    return [p[1] for p in r.json().get("prices", [])]
+    closes, highs, lows, times = [], [], [], []
+    for i, c in enumerate(q["close"]):
+        if c is None:
+            continue
+        closes.append(c)
+        highs.append(q["high"][i] if q["high"][i] is not None else c)
+        lows.append(q["low"][i] if q["low"][i] is not None else c)
+        times.append(ts[i] if i < len(ts) else 0)
+    return {"close": closes, "high": highs, "low": lows, "time": times}
 
 
 def fmt_price(p):
     if p is None:
         return "—"
-    ap = abs(p)
-    if ap >= 1000:
+    a = abs(p)
+    if a >= 1000:
         return f"{p:,.2f}"
-    if ap >= 10:
+    if a >= 10:
         return f"{p:,.2f}"
-    if ap >= 1:
+    if a >= 1:
         return f"{p:.4f}"
     return f"{p:.5f}"
 
 
-def build_entry(sym, disp, name, market, x):
-    sig = compute_signal(x)
+def build_entry(sym, disp, name, market, primary, higher):
+    sig = score_bars(primary, "days")
     if not sig:
         return None
+    x = primary["close"]
     price = x[-1]
     prev = x[-2] if len(x) > 1 else price
     change = ((price - prev) / prev * 100) if prev else 0.0
-    hist = x[-90:]
+
+    hi = score_bars(higher, "weeks") if higher and len(higher["close"]) >= 30 else None
+    mtf = None
+    if hi:
+        p_dir = 1 if "BUY" in sig["signal"] else (-1 if "SELL" in sig["signal"] else 0)
+        h_dir = 1 if "BUY" in hi["signal"] else (-1 if "SELL" in hi["signal"] else 0)
+        mtf = {
+            "tf": TF_HIGHER[0],
+            "signal": hi["signal"],
+            "rsi": hi["rsi"],
+            "aligned": bool(p_dir and h_dir and p_dir == h_dir),
+        }
+
     return {
-        "symbol": disp,
-        "ticker": sym,
-        "name": name,
-        "market": market.capitalize(),
-        "marketKey": market,
-        "icon": ICON[market],
-        "price": round(price, 6),
-        "priceText": fmt_price(price),
+        "symbol": disp, "ticker": sym, "name": name,
+        "market": market.capitalize(), "marketKey": market, "icon": ICON[market],
+        "price": round(price, 6), "priceText": fmt_price(price),
         "change": round(change, 2),
-        "history": [round(v, 6) for v in hist],
+        "timeframe": TF_PRIMARY[0],
+        "timeframeDesc": TF_PRIMARY[3],
+        "timeframeHorizon": TF_PRIMARY[4],
+        "history": [round(v, 6) for v in x[-90:]],
         "spark": [round(v, 6) for v in x[-30:]],
+        "bars": len(x),
+        "asOf": (primary["time"][-1] if primary.get("time") else None),
+        "mtf": mtf,
         **sig,
     }
+
+
+def collect(group, market):
+    out = []
+    for sym, disp, name in group:
+        try:
+            p = yf_bars(sym, TF_PRIMARY[1], TF_PRIMARY[2])
+            if len(p["close"]) < 30:
+                raise ValueError(f"only {len(p['close'])} bars")
+            try:
+                h = yf_bars(sym, TF_HIGHER[1], TF_HIGHER[2])
+            except Exception:
+                h = None
+            e = build_entry(sym, disp, name, market, p, h)
+            if e:
+                out.append(e)
+        except Exception as ex:
+            print(f"[WARN] {disp} ({sym}): {ex}", file=sys.stderr)
+    return out
 
 
 def detect_session():
@@ -282,26 +296,20 @@ def detect_session():
     return "New York Session", "🌎", "US-driven · highest volume window"
 
 
-def collect(group, market):
-    out = []
-    for sym, disp, name in group:
-        try:
-            x = yf_history(sym)
-            if len(x) < 30:
-                raise ValueError(f"only {len(x)} points")
-            e = build_entry(sym, disp, name, market, x)
-            if e:
-                out.append(e)
-        except Exception as ex:
-            print(f"[WARN] {disp} ({sym}): {ex}", file=sys.stderr)
-    return out
-
-
 def main():
     session, icon, meta = detect_session()
     data = {
         "generated": datetime.now(timezone.utc).isoformat(),
         "session": {"name": session, "icon": icon, "meta": meta},
+        "timeframes": {
+            "primary": {"code": TF_PRIMARY[0], "desc": TF_PRIMARY[3],
+                        "horizon": TF_PRIMARY[4], "interval": TF_PRIMARY[1],
+                        "range": TF_PRIMARY[2]},
+            "higher": {"code": TF_HIGHER[0], "desc": TF_HIGHER[3],
+                       "horizon": TF_HIGHER[4], "interval": TF_HIGHER[1],
+                       "range": TF_HIGHER[2]},
+        },
+        "risk": {"stopMult": ATR_STOP_MULT, "targetMult": ATR_TARGET_MULT, "rr": 1.5},
         "markets": {
             "forex": collect(FOREX, "forex"),
             "crypto": collect(CRYPTO, "crypto"),
@@ -310,20 +318,27 @@ def main():
     }
 
     allsym = data["markets"]["forex"] + data["markets"]["crypto"] + data["markets"]["stocks"]
-    ranked = sorted(allsym, key=lambda e: (abs(e["score"]), e["confidence"]), reverse=True)
+
+    def rank(e):
+        align = 0.5 if (e.get("mtf") and e["mtf"]["aligned"]) else 0
+        return (abs(e["score"]) + align, e["confidence"])
+
+    ranked = sorted(allsym, key=rank, reverse=True)
     data["best"] = ranked[0] if ranked else None
     data["counts"] = {k: len(v) for k, v in data["markets"].items()}
+    data["aligned"] = sum(1 for e in allsym if e.get("mtf") and e["mtf"]["aligned"])
 
     DATA_JSON.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    print(f"[OK] {sum(data['counts'].values())} symbols "
+    print(f"[OK] {sum(data['counts'].values())} symbols on {TF_PRIMARY[0]} "
           f"(forex {data['counts']['forex']}, crypto {data['counts']['crypto']}, "
-          f"stocks {data['counts']['stocks']})", file=sys.stderr)
+          f"stocks {data['counts']['stocks']}) · {data['aligned']} aligned with {TF_HIGHER[0]}",
+          file=sys.stderr)
     if data["best"]:
         b = data["best"]
-        print(f"[BEST] {b['symbol']} → {b['signal']} (score {b['score']}, conf {b['confidence']}%)",
-              file=sys.stderr)
+        ap = f"{b['atrPct']*100:.2f}%" if b["atrPct"] else "n/a"
+        print(f"[BEST] {b['symbol']} → {b['signal']} (score {b['score']}, "
+              f"conf {b['confidence']}%, ATR {ap})", file=sys.stderr)
 
-    # Bake a fallback copy into index.html so the page renders offline
     if INDEX_HTML.exists():
         html = INDEX_HTML.read_text(encoding="utf-8")
         payload = json.dumps(data, ensure_ascii=False)
