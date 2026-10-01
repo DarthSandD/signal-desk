@@ -48,11 +48,18 @@ def main():
     if best:
         up = "BUY" in best["signal"]
         icon = "🟢" if up else ("🔴" if "SELL" in best["signal"] else "⚪")
+
+        def fp(v):
+            if v is None:
+                return "—"
+            a = abs(v)
+            return f"{v:,.2f}" if a >= 10 else (f"{v:.4f}" if a >= 1 else f"{v:.5f}")
+
         print(
             f"{icon} *Signal Desk — {best['signal']}* — {best['symbol']}\n"
             f"• Price: `{best['priceText']}`  ({best['change']:+.2f}%)\n"
             f"• Confidence: `{best['confidence']}%`  ·  RSI `{best['rsi']}`\n"
-            f"• Entry `{best['entry']}`  ·  Stop `{best['stop']}`  ·  Target `{best['target']}`\n"
+            f"• Entry `{fp(best['entry'])}`  ·  Stop `{fp(best['stop'])}`  ·  Target `{fp(best['target'])}`\n"
             f"• {counts.get('forex',0)} forex · {counts.get('crypto',0)} crypto · "
             f"{counts.get('stocks',0)} stocks scanned\n"
             f"🔗 {SITE_URL}"
