@@ -46,6 +46,18 @@ def main():
 
     # 3) Telegram alert
     if best:
+        atr = best.get("atr") or 0
+        if "BUY" in best["signal"]:
+            entry = best["price"]
+            stop = entry - atr * data.get("risk", {}).get("stopMult", 1.5)
+            target = entry + atr * data.get("risk", {}).get("targetMult", 2.25)
+        else:
+            entry = best["price"]
+            stop = entry + atr * data.get("risk", {}).get("stopMult", 1.5)
+            target = entry - atr * data.get("risk", {}).get("targetMult", 2.25)
+        best["entry"] = entry
+        best["stop"] = stop
+        best["target"] = target
         up = "BUY" in best["signal"]
         icon = "🟢" if up else ("🔴" if "SELL" in best["signal"] else "⚪")
 
