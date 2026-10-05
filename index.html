@@ -228,7 +228,7 @@ footer a{color:var(--mut);border-bottom:1px dotted var(--border-hi)}
 .site-credit{
   --sc-text:#eceef4;--sc-muted:#8b90a4;--sc-link:#6d8bff;--sc-border:rgba(255,255,255,.08);
   --sc-text:inherit; --sc-muted:#8b90a4; --sc-link:#6d8bff;
-  --sc-border:rgba(128,128,128,.18); --sc-btn-bg:#ea4aaa; --sc-btn-fg:#fff;
+  --sc-border:rgba(128,128,128,.18); --sc-btn-bg:#faae2b; --sc-btn-fg:#0a0c10;
   position:relative; z-index:2;
   max-width:1180px; margin:0 auto; padding:26px 24px 34px;
   border-top:1px solid var(--sc-border);
@@ -241,18 +241,18 @@ footer a{color:var(--mut);border-bottom:1px dotted var(--border-hi)}
 .site-credit .sc-links a{color:var(--sc-link); text-decoration:none; border-bottom:1px solid transparent; transition:border-color .15s}
 .site-credit .sc-links a:hover{border-bottom-color:currentColor}
 .site-credit .sc-links span{opacity:.45}
-.site-credit .sc-sponsor{
+.site-credit .sc-saweria{
   display:inline-flex; align-items:center; gap:9px; white-space:nowrap;
   padding:11px 19px; border-radius:999px; font-weight:700; font-size:.86rem;
   text-decoration:none; background:var(--sc-btn-bg); color:var(--sc-btn-fg);
   border:1px solid rgba(0,0,0,.12); transition:transform .15s, box-shadow .15s;
 }
-.site-credit .sc-sponsor:hover{transform:translateY(-1px); box-shadow:0 9px 24px rgba(0,0,0,.3)}
-.site-credit .sc-heart{font-size:1.06em; line-height:1}
+.site-credit .sc-saweria:hover{transform:translateY(-1px); box-shadow:0 9px 24px rgba(0,0,0,.3)}
+.site-credit .sc-cup{font-size:1.06em; line-height:1}
 .site-credit--inline{padding:16px 0 4px; border-top:1px solid var(--sc-border); margin-top:14px}
 .site-credit--inline .sc-made{display:flex; flex-wrap:wrap; gap:7px; align-items:center; justify-content:center}
 .site-credit--inline .sc-links--inline{margin:0}
-.site-credit--inline .sc-sponsor{padding:8px 15px; font-size:.8rem}
+.site-credit--inline .sc-saweria{padding:8px 15px; font-size:.8rem}
 @media(max-width:640px){
   .site-credit{flex-direction:column; align-items:flex-start; text-align:left}
   .site-credit--inline{align-items:center}
@@ -323,8 +323,8 @@ footer a{color:var(--mut);border-bottom:1px dotted var(--border-hi)}
   <p class="sc-made">Built by <strong>Darren Lieu</strong>
     <span class="sc-links sc-links--inline"><a href="https://github.com/DarthSandD" target="_blank" rel="noopener">GitHub</a><span>·</span><a href="https://darrenlin.pages.dev/" target="_blank" rel="noopener">Portfolio</a><span>·</span><a href="https://www.instagram.com/darren.lin_ai" target="_blank" rel="noopener">@darren.lin_ai</a></span>
   </p>
-  <a class="sc-sponsor" href="https://github.com/sponsors/DarthSandD" target="_blank" rel="noopener" aria-label="Sponsor Darren Lieu on GitHub">
-    <span class="sc-heart" aria-hidden="true">♥</span> Sponsor on GitHub
+  <a class="sc-saweria" href="https://saweria.co/darrenlin" target="_blank" rel="noopener" aria-label="Support Darren Lieu on Saweria">
+    <span class="sc-cup" aria-hidden="true">☕</span> Support on Saweria
   </a>
 </div>
 </footer>
