@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-SITE_URL = "https://darthsandd.github.io/signal-desk/"
+SITE_URL = "https://darren-signaldesk.pages.dev/"
 
 
 def run(cmd, **kw):

@@ -2,7 +2,7 @@
 
 > Live forex, crypto and stock signals with clear **BUY / SELL** calls.
 
-**▶️ [Open the live app](https://darthsandd.github.io/signal-desk/)**
+**▶️ [Open the live app](https://darren-signaldesk.pages.dev/)**
 
 An installable web app (PWA) that surfaces market signals in plain language — no chart archaeology, no indicator soup. You get a direction, not a homework assignment.
 
